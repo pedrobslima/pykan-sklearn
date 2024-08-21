@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from MultKAN import KAN
+from .MultKAN import KAN
 from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_is_fitted
 from sklearn.metrics import accuracy_score
