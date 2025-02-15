@@ -11,19 +11,76 @@ import seaborn as sns
 class kanLoss(torch.nn.CrossEntropyLoss):
   def forward(self, input, target):
         return super().forward(input.type(torch.float64), target.type(torch.long))
+  
+''' TODO: Allow the use of BCELoss()
+class kanBinaryLoss(torch.nn.BCELoss):
+  def forward(self, input, target):
+        return super().forward(input.type(torch.float64), target.type(torch.long))
+'''
 
-# Classe do modelo KAN: (TODO: Maybe change the declare args so the base KAN model is declared inside the KANClassifier?)
 class KANClassifier(BaseEstimator):
     '''Classe para o modelo KAN, para que se pareça mais com outras classes de
     modelos de AM do scikit-learn
 
     Parâmetros:
-    - model: modelo original da classe MultKAN() | KAN()
+    width : list of int
+        Without multiplication nodes: :math:`[n_0, n_1, .., n_{L-1}]` specify the number of neurons in each layer (including inputs/outputs)
+        With multiplication nodes: :math:`[[n_0,m_0=0], [n_1,m_1], .., [n_{L-1},m_{L-1}]]` specify the number of addition/multiplication nodes in each layer (including inputs/outputs)
+    grid : int
+        number of grid intervals. Default: 3.
+    k : int
+        order of piecewise polynomial. Default: 3.
+    mult_arity : int, or list of int lists
+        multiplication arity for each multiplication node (the number of numbers to be multiplied)
+    noise_scale : float
+        initial injected noise to spline.
+    base_fun : str
+        the residual function b(x). Default: 'silu'
+    symbolic_enabled : bool
+        compute (True) or skip (False) symbolic computations (for efficiency). By default: True. 
+    affine_trainable : bool
+        affine parameters are updated or not. Affine parameters include node_scale, node_bias, subnode_scale, subnode_bias
+    grid_eps : float
+        When grid_eps = 1, the grid is uniform; when grid_eps = 0, the grid is partitioned using percentiles of samples. 0 < grid_eps < 1 interpolates between the two extremes.
+    grid_range : list/np.array of shape (2,))
+        setting the range of grids. Default: [-1,1]. This argument is not important if fit(update_grid=True) (by default updata_grid=True)
+    sp_trainable : bool
+        If true, scale_sp is trainable. Default: True.
+    sb_trainable : bool
+        If true, scale_base is trainable. Default: True.
+    device : str
+        device
+    random_state : int
+        random seed
+    save_act : bool
+        indicate whether intermediate activations are saved in forward pass
+    sparse_init : bool
+        sparse initialization (True) or normal dense initialization. Default: False.
+    auto_save : bool
+        indicate whether to automatically save a checkpoint once the model is modified
+    state_id : int
+        the state of the model (used to save checkpoint)
+    ckpt_path : str
+        the folder to store checkpoints. Default: './model'
+    round : int
+        the number of times rewind() has been called
+    device : str
+    opt : str
+        "LBFGS" or "Adam"
+    steps : int
+        training steps
+    loss_fn : function
+                loss function
 
-    Exp.: KANnet(KAN(width=[2,2], grid=3, k=3))
+    Exp.: KANClassifier(width=[2,5,2], grid=5, k=3, random_state=1, opt="Adam", steps=20)
     '''
-    def __init__(self, model:KAN) -> None:
-       self.model = model
+    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, random_state=1, save_act=True, sparse_init=False, auto_save=True, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu', opt="LBFGS", steps=20, loss_fn=kanLoss()) -> None:
+       self.model = KAN(width=width, grid=grid, k=k, mult_arity=mult_arity, noise_scale=noise_scale, scale_base_mu=scale_base_mu, scale_base_sigma=scale_base_sigma, base_fun=base_fun, symbolic_enabled=symbolic_enabled, affine_trainable=affine_trainable, grid_eps=grid_eps, grid_range=grid_range, sp_trainable=sp_trainable, sb_trainable=sb_trainable, seed=random_state, save_act=save_act, sparse_init=sparse_init, auto_save=auto_save, first_init=first_init, ckpt_path=ckpt_path, state_id=state_id, round=round, device=device)
+       self.optimizer = opt
+       self.steps = steps
+       self.loss_fn = loss_fn
+       self.random_state = random_state
+       #self.model = model
        self._estimator_type = "classifier"
        self.data = {}
        self.results = {}
@@ -33,7 +90,14 @@ class KANClassifier(BaseEstimator):
 
     def get_params(self, deep=False):
         # suppose this estimator has parameters "alpha" and "recursive"
-        return {"width": self.model.width, "grid": self.model.grid, "k": self.model.k}
+        return {"width": self.model.width, "grid": self.model.grid, "k": self.model.k,
+                "random_state": self.random_state,
+                "mult_arity": self.model.mult_arity, "base_fun": self.model.base_fun_name,
+                "symbolic_enabled": self.model.symbolic_enabled, "affine_trainable": self.model.affine_trainable,
+                "grid_eps": self.model.grid_eps, "grid_range": self.model.grid_range,
+                "sp_trainable": self.model.sp_trainable, "sb_trainable": self.model.sb_trainable,
+                "device": self.model.device, "save_act": self.model.save_act,
+                "auto_save": self.model.auto_save, "round": self.model.round}
 
     # Transformação de dataset:
     def __dt4kan(self, datarray):
@@ -64,7 +128,7 @@ class KANClassifier(BaseEstimator):
     # TODO: 
     # - Include all arguments of the original fit function from MultKAN
     # - Add possibility of adding other metrics (?)
-    def fit(self, dataset:dict, opt="LBFGS", steps:int=20, loss_fn=kanLoss()):
+    def fit(self, dataset):#X_train, y_train, X_test, y_test): 
         '''Função de treinamento do modelo KAN
 
         Parâmetros:
@@ -81,17 +145,18 @@ class KANClassifier(BaseEstimator):
         #if(sorted(list(dataset.keys())) == ['test_input', 'test_label', 'train_input', 'train_label']):
         #    raise KeyError("The provided dataset needs to have the keys: 'train_input', 'train_label', 'test_input', 'test_label'")
         self.is_fitted_ = True
-        self.data = dataset
+        for key in ['train_input', 'train_label', 'test_input', 'test_label']:
+            self.data[key] = self.__dt4kan(dataset[key])
         self.classes_ = self.data['train_label'].unique()
 
         self.results = self.model.fit(self.data,
-                                      opt=opt,
-                                      steps=steps,
+                                      opt=self.optimizer,
+                                      steps=self.steps,
                                       metrics=(self.train_acc,
                                                self.test_acc,
                                                self.test_prec,
                                                self.test_recall),
-                                      loss_fn=loss_fn)
+                                      loss_fn=self.loss_fn)
         self.accuracy, self.precision, self.recall = self.results['test_acc'][-1], self.results['test_prec'][-1], self.results['test_recall'][-1]
         self.classes_ = np.array([i for i in range(self.predict_proba(self.data['test_input'][:2]).shape[1])])
         return self
