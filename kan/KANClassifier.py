@@ -8,15 +8,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Função de perda:
-class kanLoss(torch.nn.CrossEntropyLoss):
+class kanCELoss(torch.nn.CrossEntropyLoss): # It works for any amount of classes
   def forward(self, input, target):
         return super().forward(input.type(torch.float64), target.type(torch.long))
-  
-''' TODO: Allow the use of BCELoss()
-class kanBinaryLoss(torch.nn.BCELoss):
-  def forward(self, input, target):
-        return super().forward(input.type(torch.float64), target.type(torch.long))
-'''
 
 class KANClassifier(BaseEstimator):
     '''Classe para o modelo KAN, para que se pareça mais com outras classes de
@@ -74,7 +68,7 @@ class KANClassifier(BaseEstimator):
 
     Exp.: KANClassifier(width=[2,5,2], grid=5, k=3, random_state=1, opt="Adam", steps=20)
     '''
-    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, random_state=1, save_act=True, sparse_init=False, auto_save=True, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu', opt="LBFGS", steps=20, loss_fn=kanLoss()) -> None:
+    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, random_state=1, save_act=True, sparse_init=False, auto_save=False, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu', opt="LBFGS", steps=20, loss_fn=kanCELoss()) -> None:
        self.model = KAN(width=width, grid=grid, k=k, mult_arity=mult_arity, noise_scale=noise_scale, scale_base_mu=scale_base_mu, scale_base_sigma=scale_base_sigma, base_fun=base_fun, symbolic_enabled=symbolic_enabled, affine_trainable=affine_trainable, grid_eps=grid_eps, grid_range=grid_range, sp_trainable=sp_trainable, sb_trainable=sb_trainable, seed=random_state, save_act=save_act, sparse_init=sparse_init, auto_save=auto_save, first_init=first_init, ckpt_path=ckpt_path, state_id=state_id, round=round, device=device)
        self.optimizer = opt
        self.steps = steps
@@ -114,15 +108,31 @@ class KANClassifier(BaseEstimator):
     def test_acc(self):
         return torch.mean((torch.argmax(self.model(self.data['test_input']), dim=1) == self.data['test_label']).float())
 
+    def train_prec(self, lbl = 1):
+        p_hat = (torch.argmax(torch.softmax(self.model(self.data['train_input']), dim=1), dim=1) == lbl)
+        vp = (p_hat & (self.data['train_label'].float() == lbl))
+        return (vp.sum()/p_hat.sum()).float()
+
     def test_prec(self, lbl = 1):
         p_hat = (torch.argmax(torch.softmax(self.model(self.data['test_input']), dim=1), dim=1) == lbl)
         vp = (p_hat & (self.data['test_label'].float() == lbl))
         return (vp.sum()/p_hat.sum()).float()
 
+    def train_recall(self):
+        p = (self.data['train_label'] == 1)
+        vp = (p & (torch.argmax(torch.softmax(self.model(self.data['train_input']), dim=1), dim=1) == 1))
+        return (vp.sum()/p.sum()).float()
+    
     def test_recall(self):
         p = (self.data['test_label'] == 1)
         vp = (p & (torch.argmax(torch.softmax(self.model(self.data['test_input']), dim=1), dim=1) == 1))
         return (vp.sum()/p.sum()).float()
+    
+    def train_f1(self, lbl=1):
+        return (self.train_prec(lbl) + self.train_recall())/2
+    
+    def test_f1(self, lbl=1):
+        return (self.test_prec(lbl) + self.test_recall())/2
 
     # Fit
     # TODO: 
@@ -137,10 +147,6 @@ class KANClassifier(BaseEstimator):
             - "train_label"
             - "test_input"
             - "test_label"
-
-        - opt: ...
-        - steps: ...
-        - loss_fn: ...
         '''
         #if(sorted(list(dataset.keys())) == ['test_input', 'test_label', 'train_input', 'train_label']):
         #    raise KeyError("The provided dataset needs to have the keys: 'train_input', 'train_label', 'test_input', 'test_label'")
@@ -152,13 +158,13 @@ class KANClassifier(BaseEstimator):
         self.results = self.model.fit(self.data,
                                       opt=self.optimizer,
                                       steps=self.steps,
-                                      metrics=(self.train_acc,
-                                               self.test_acc,
-                                               self.test_prec,
-                                               self.test_recall),
+                                      metrics=(self.train_acc, self.test_acc,
+                                               self.train_prec, self.test_prec,
+                                               self.train_recall, self.test_recall,
+                                               self.train_f1, self.test_f1),
                                       loss_fn=self.loss_fn)
-        self.accuracy, self.precision, self.recall = self.results['test_acc'][-1], self.results['test_prec'][-1], self.results['test_recall'][-1]
-        self.classes_ = np.array([i for i in range(self.predict_proba(self.data['test_input'][:2]).shape[1])])
+        self.accuracy, self.precision, self.recall, self.f1 = self.results['test_acc'][-1], self.results['test_prec'][-1], self.results['test_recall'][-1], self.results['test_f1'][-1]
+        self.classes_ = np.array([i for i in range(self.predict_proba(self.data['test_input'][:2]).shape[1])]) # isso é necessário? n acho q faça mt sentido
         return self
 
     # Predições:
