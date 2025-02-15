@@ -186,23 +186,28 @@ class KANClassifier(BaseEstimator):
 
     # TODO: Change this function to return the figure, instead of just showing it right away
     def plot_metric(self, metric:str):
-        if(metric not in ('loss', 'train_loss', 'test_loss', 'acc', 'train_acc', 'test_acc', 'test_prec', 'test_recall')):
-            raise ValueError(f"'{metric}' isn't a valid plottable metrics, which are: 'loss', 'train_loss', 'test_loss', 'acc', 'train_acc', 'test_acc', 'test_prec', 'test_recall'")
+        if(metric not in ('loss', 'train_loss', 'test_loss', 'acc', 'train_acc', 'test_acc', 'prec', 'train_prec', 'test_prec', 'recall', 'train_recall', 'test_recall', 'f1', 'train_f1', 'test_f1')):
+            raise ValueError(f"'{metric}' isn't a valid plottable metrics, which are: 'loss', 'train_loss', 'test_loss', 'acc', 'train_acc', 'test_acc', 'prec', 'train_prec', 'test_prec', 'recall', 'train_recall', 'test_recall', 'f1', 'train_f1', 'test_f1'")
 
-        if((metric == 'loss') or (metric == 'acc')):
+        if(len(metric) < 7):
             plot0 = [float(x) for x in self.results['train_'+metric]]
             plot1 = [float(x) for x in self.results['test_'+metric]]
-            sns.lineplot(y=plot0, x=range(1, len(plot0) + 1))
+            plt.plot(plot0, label='Training data')
+            plt.plot(plot1, label='Test data')
+            plt.legend()
         else:
-            plot1 = [float(x) for x in self.results[metric]]
-        sns.lineplot(y=plot1, x=range(1, len(plot1) + 1))
+            plot0 = [float(x) for x in self.results[metric]]
+            plt.plot(plot0)
+        
 
         title = metric
-        if(title[-3:] == 'acc'):
+        if(title[-2:] == 'f1'):
+            title += ' score'
+        elif(title[-3:] == 'acc'):
             title += 'uracy'
+        elif(title[-4:] == 'prec'):
+            title += 'ision'
         if(title[0] == 't'):
-            if(title[-4:] == 'prec'):
-                title += 'ision'
             i = title.index('_')
             title = f'{title[i+1:]} ({title[:i]})'
         plt.title(title.capitalize())
