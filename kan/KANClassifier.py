@@ -24,7 +24,7 @@ class KANClassifier(BaseEstimator):
     noise_scale : float
         initial injected noise to spline.
     base_fun : str
-        the residual function b(x). Default: 'silu'
+        the residual activation function b(x). 'silu' (default), 'identity' or 'zero'
     symbolic_enabled : bool
         compute (True) or skip (False) symbolic computations (for efficiency). By default: True. 
     affine_trainable : bool
@@ -63,13 +63,15 @@ class KANClassifier(BaseEstimator):
 
     Exp.: KANClassifier(width=[2,5,2], grid=5, k=3, random_state=1, opt="Adam", steps=20)
     '''
-    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, random_state=1, save_act=True, sparse_init=False, auto_save=False, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu', opt="LBFGS", steps=20, loss_fn=kanCELoss(), lr=1.) -> None:
+    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, random_state=1, save_act=True, sparse_init=False, auto_save=False, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu', opt="LBFGS", steps=20, loss_fn=kanCELoss(), lr=1., lamb=0.) -> None:
        self.model = KAN(width=width, grid=grid, k=k, mult_arity=mult_arity, noise_scale=noise_scale, scale_base_mu=scale_base_mu, scale_base_sigma=scale_base_sigma, base_fun=base_fun, symbolic_enabled=symbolic_enabled, affine_trainable=affine_trainable, grid_eps=grid_eps, grid_range=grid_range, sp_trainable=sp_trainable, sb_trainable=sb_trainable, seed=random_state, save_act=save_act, sparse_init=sparse_init, auto_save=auto_save, first_init=first_init, ckpt_path=ckpt_path, state_id=state_id, round=round, device=device)
+       self.device = device
        self.optimizer = opt
        self.steps = steps
        self.loss_fn = loss_fn
        self.learning_rate = lr
        self.random_state = random_state
+       self.lamb = lamb
        self._estimator_type = "classifier"
        self.data = {}
        self.results = {}
@@ -91,10 +93,10 @@ class KANClassifier(BaseEstimator):
     # Transformação de dataset:
     def __dt4kan(self, datarray):
         if isinstance(datarray, np.ndarray):
-            return torch.from_numpy(datarray).float()
+            return (torch.from_numpy(datarray).float()).to(self.device)
         elif isinstance(datarray, torch.Tensor):
-            return datarray
-        return torch.from_numpy(np.array(datarray)).float()
+            return datarray.to(self.device)
+        return (torch.from_numpy(np.array(datarray)).float()).to(self.device)
 
     # Métricas
     def train_acc(self):
@@ -124,10 +126,20 @@ class KANClassifier(BaseEstimator):
         return (vp.sum()/p.sum()).float()
     
     def train_f1(self, lbl=1):
-        return (self.train_prec(lbl) + self.train_recall())/2
+        p = (self.data['train_label'] == 1)
+        p_hat = (torch.argmax(torch.softmax(self.model(self.data['train_input']), dim=1), dim=1) == lbl)
+        vp = (p & p_hat).sum()
+        fp = (~p & p_hat).sum()
+        fn = (p & ~p_hat).sum()
+        return (2 * vp) / (2 * vp + fp + fn)
     
     def test_f1(self, lbl=1):
-        return (self.test_prec(lbl) + self.test_recall())/2
+        p = (self.data['test_label'] == 1)
+        p_hat = (torch.argmax(torch.softmax(self.model(self.data['test_input']), dim=1), dim=1) == lbl)
+        vp = (p & p_hat).sum()
+        fp = (~p & p_hat).sum()
+        fn = (p & ~p_hat).sum()
+        return (2 * vp) / (2 * vp + fp + fn)
 
     # Fit
     # TODO: 
@@ -158,7 +170,7 @@ class KANClassifier(BaseEstimator):
                                                self.train_recall, self.test_recall,
                                                self.train_f1, self.test_f1),
                                       loss_fn=self.loss_fn,
-                                      lr=self.learning_rate)
+                                      lr=self.learning_rate, lamb=self.lamb)
         self.accuracy, self.precision, self.recall, self.f1 = self.results['test_acc'][-1], self.results['test_prec'][-1], self.results['test_recall'][-1], self.results['test_f1'][-1]
         self.classes_ = np.array([i for i in range(self.predict_proba(self.data['test_input'][:2]).shape[1])]) # isso é necessário? n acho q faça mt sentido
         return self
@@ -174,6 +186,8 @@ class KANClassifier(BaseEstimator):
         return torch.softmax(self.model(new_data), dim=1).detach().numpy()
 
     def score(self, X, y):
+        X = self.__dt4kan(X)
+        y = self.__dt4kan(y)
         return accuracy_score(y, self.predict(X))
 
     # Plotting:
