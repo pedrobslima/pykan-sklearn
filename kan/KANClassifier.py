@@ -6,6 +6,8 @@ from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_is_fitted
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
+from typing import Any, Mapping
+from math import ceil, floor
 
 class KANClassifier(BaseEstimator):
     '''Classe para o modelo KAN, para que se pareça mais com outras classes de
@@ -63,7 +65,7 @@ class KANClassifier(BaseEstimator):
 
     Exp.: KANClassifier(width=[2,5,2], grid=5, k=3, random_state=1, opt="Adam", steps=20)
     '''
-    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, random_state=1, save_act=True, sparse_init=False, auto_save=False, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu', opt="LBFGS", steps=20, loss_fn=kanCELoss(), lr=1., lamb=0.) -> None:
+    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, random_state=1, save_act=True, sparse_init=False, auto_save=False, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu', opt="LBFGS", steps=20, loss_fn=kanCELoss(), lr=1., lamb=0., val_size=0) -> None:
        self.model = KAN(width=width, grid=grid, k=k, mult_arity=mult_arity, noise_scale=noise_scale, scale_base_mu=scale_base_mu, scale_base_sigma=scale_base_sigma, base_fun=base_fun, symbolic_enabled=symbolic_enabled, affine_trainable=affine_trainable, grid_eps=grid_eps, grid_range=grid_range, sp_trainable=sp_trainable, sb_trainable=sb_trainable, seed=random_state, save_act=save_act, sparse_init=sparse_init, auto_save=auto_save, first_init=first_init, ckpt_path=ckpt_path, state_id=state_id, round=round, device=device)
        self.device = device
        self.optimizer = opt
@@ -88,7 +90,8 @@ class KANClassifier(BaseEstimator):
                 "grid_eps": self.model.grid_eps, "grid_range": self.model.grid_range,
                 "sp_trainable": self.model.sp_trainable, "sb_trainable": self.model.sb_trainable,
                 "device": self.model.device, "save_act": self.model.save_act,
-                "auto_save": self.model.auto_save, "round": self.model.round}
+                "auto_save": self.model.auto_save, "round": self.model.round, 'opt':self.optimizer, 
+                'steps':self.steps, 'loss_fn':self.loss_fn, 'lr':self.learning_rate, 'lamb': self.lamb}
 
     # Transformação de dataset:
     def __dt4kan(self, datarray):
@@ -145,7 +148,7 @@ class KANClassifier(BaseEstimator):
     # TODO: 
     # - Include all arguments of the original fit function from MultKAN
     # - Add possibility of adding other metrics (?)
-    def fit(self, dataset):#X_train, y_train, X_test, y_test): 
+    def fit(self, data_in, data_out=None):#X_train, y_train, X_test, y_test): 
         '''Função de treinamento do modelo KAN
 
         Parâmetros:
@@ -157,9 +160,20 @@ class KANClassifier(BaseEstimator):
         '''
         #if(sorted(list(dataset.keys())) == ['test_input', 'test_label', 'train_input', 'train_label']):
         #    raise KeyError("The provided dataset needs to have the keys: 'train_input', 'train_label', 'test_input', 'test_label'")
-        self.is_fitted_ = True
-        for key in ['train_input', 'train_label', 'test_input', 'test_label']:
-            self.data[key] = self.__dt4kan(dataset[key])
+        if(data_out is None and type(data_in)!=dict):
+            raise TypeError("If a y array isn't provided for the training as data_out, then data_in must be a dictionary with the following keys: 'train_input', 'train_label', 'test_input', 'test_label'")
+        elif(type(data_in)==dict):
+            for key in ['train_input', 'train_label', 'test_input', 'test_label']:
+                self.data[key] = self.__dt4kan(data_in[key])
+        else:
+            #val_index = int(self.val_size*len(data_out))
+            #if(val_index==0):
+            #    val_index = 1
+            self.data = {'train_input': self.__dt4kan(data_in),
+                         'train_label': self.__dt4kan(data_out), # tá porco, mas vai ficar assim por enquanto
+                         'test_input': self.__dt4kan(data_in),
+                         'test_label': self.__dt4kan(data_out)}
+        
         self.classes_ = self.data['train_label'].unique()
 
         self.results = self.model.fit(self.data,
@@ -171,6 +185,7 @@ class KANClassifier(BaseEstimator):
                                                self.train_f1, self.test_f1),
                                       loss_fn=self.loss_fn,
                                       lr=self.learning_rate, lamb=self.lamb)
+        self.is_fitted_ = True
         self.accuracy, self.precision, self.recall, self.f1 = self.results['test_acc'][-1], self.results['test_prec'][-1], self.results['test_recall'][-1], self.results['test_f1'][-1]
         self.classes_ = np.array([i for i in range(self.predict_proba(self.data['test_input'][:2]).shape[1])]) # isso é necessário? n acho q faça mt sentido
         return self
@@ -182,6 +197,7 @@ class KANClassifier(BaseEstimator):
         return torch.argmax(torch.softmax(self.model(new_data), dim=1), dim=1).detach().numpy()
 
     def predict_proba(self, new_data:torch.Tensor | np.ndarray) -> np.ndarray:
+        check_is_fitted(self)
         new_data = self.__dt4kan(new_data)
         return torch.softmax(self.model(new_data), dim=1).detach().numpy()
 
@@ -223,4 +239,12 @@ class KANClassifier(BaseEstimator):
         plt.title(title.capitalize())
 
         plt.show()
+
+    def state_dict(self):
+        return self.model.state_dict()
+
+    def load_state_dict(self, state_dict: Mapping[str, Any], strict:bool=True, assign:bool=False):
+        self.is_fitted_ = True
+        self.model.load_state_dict(state_dict, strict, assign)
+
 
