@@ -174,6 +174,10 @@ class KANClassifier(BaseEstimator):
                          'test_input': self.__dt4kan(data_in),
                          'test_label': self.__dt4kan(data_out)}
         
+        #for inpt in ['train_input', 'test_input']:
+        #    if(self.model.width[0] != self.data[inpt].shape[1]):
+        #        raise ValueError(f": attempted to input of shape {self.data[inpt].shape} on grid [{self.model.width[0]},...]")
+
         self.classes_ = self.data['train_label'].unique()
 
         self.results = self.model.fit(self.data,
